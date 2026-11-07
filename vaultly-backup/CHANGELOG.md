@@ -3,6 +3,7 @@
 ## 1.8.9 - 2026-11-08
 Fixes for the WordPress.org plugin review (round 3).
 - **Backup file names are unguessable again.** Every archive name now ends in a random 64-bit id (`..._20261105-063028_3e19c277167f2a40.vlt`). Uploaded backups are stored under a fresh random name instead of the uploader's. Backups made by older versions (names made of host + time only) are renamed once, automatically, when the Backups page is opened with no job running; their old public links stop working.
+- The settings, activity log and running-job state files now have secret names (`log-<key>.jsonl`, ...), and the log no longer contains a backup's random id. Before, on a web server that ignores `.htaccess` (nginx, WordPress Playground) `log.jsonl` was readable and listed every backup name. Old files are renamed automatically.
 - The work folder of a running backup (raw database dump) now has deny rules and a 64-bit random name.
 - **No PHP limits are changed.** Removed `set_time_limit()` / `ignore_user_abort()`. A scheduled backup works in slices of the host's own time limit; if it is not finished, a one-off cron event `vaultly_cron_continue` carries on.
 - `fwrite()` results are checked for the file list, the archive magic and the in-memory entries.

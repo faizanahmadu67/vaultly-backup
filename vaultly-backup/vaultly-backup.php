@@ -362,7 +362,7 @@ final class VAULTLY_Admin {
 	}
 
 	private static function part_path( string $name, string $fp ): string {
-		return VAULTLY_Job::dir() . '/' . VAULTLY_Job::clean_name( $name ) . '.' . substr( md5( preg_replace( '/[^0-9-]/', '', $fp ) ), 0, 8 ) . '.up';
+		return VAULTLY_Job::dir() . '/' . VAULTLY_Job::clean_name( $name ) . '.' . substr( hash_hmac( 'sha256', preg_replace( '/[^0-9-]/', '', $fp ), VAULTLY_Job::site_key() ), 0, 16 ) . '.up';
 	}
 
 	/** Lets the browser resume an interrupted upload. */

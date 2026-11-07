@@ -32,7 +32,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - Admin only (`manage_options`) + nonce on every action. Backup files are public by URL on purpose (random 64-bit name in each file name); anyone who has a link can download that file. Delete the backup to revoke it.
 - The only no-login endpoint is `vaultly_step`, accepted **only** for the last restore phases (when restore has just replaced the users table) and only with the job's random 128-bit token.
 - Archive entries validated (`..`, absolute, `\`, `:`, control chars); writes re-checked with `realpath`; SQL restricted to `DROP/CREATE/INSERT` on this site's prefix; `unserialize` never instantiates classes.
-- Backup folder: `wp-content/vaultly-backups/`. `.htaccess` / `web.config` deny the state / log / work files (everything else, incl. `.sql` `.zip` `.vlt`, is served) (Apache, IIS). **nginx** ignores both files: add `location ~ ^/wp-content/vaultly-backups/.*\.(json|jsonl|lst|bin|up|part)$ { deny all; }`.
+- Backup folder: `wp-content/vaultly-backups/`. `.htaccess` / `web.config` deny the state / log / work files (everything else, incl. `.sql` `.zip` `.vlt`, is served) (Apache, IIS). **nginx** ignores both files: add `location ~ ^/wp-content/vaultly-backups/.*\.(json|jsonl|lst|bin|up|part)$ { deny all; }`. Even without that rule nothing there gives away a backup link: archives end in a random 64-bit id, and the settings / log / job-state files have secret names (derived from `wp-config.php`) and never contain an id.
 - No telemetry. The GitHub build makes one request (latest release check) to api.github.com; the WordPress.org build makes none.
 
 ## Limits (deliberate)

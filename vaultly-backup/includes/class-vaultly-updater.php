@@ -1,7 +1,8 @@
 <?php
 /**
  * GitHub updater. Ships ONLY in the GitHub release zip (WordPress.org forbids plugin updaters): delete this file for the WordPress.org build.
- * Release rule: tag vX.Y.Z and attach an asset named vaultly-backup.zip that contains the folder vaultly-backup/.
+ * Release rule: tag vX.Y.Z and attach the GitHub build zip, named vaultly-backup-X.Y.Z.zip (or vaultly-backup.zip), that contains the folder vaultly-backup/.
+ * The WordPress.org zip (vaultly-backup-wporg-X.Y.Z.zip) must NOT be attached: it has no updater, installing it would remove updates.
  */
 defined( 'ABSPATH' ) || exit;
 
@@ -32,7 +33,7 @@ final class VAULTLY_Updater {
 		$ver = ltrim( (string) ( $rel['tag_name'] ?? '' ), 'vV' );
 		$zip = '';
 		foreach ( (array) ( $rel['assets'] ?? array() ) as $a ) {
-			if ( 'vaultly-backup.zip' === ( $a['name'] ?? '' ) ) {
+			if ( preg_match( '/^vaultly-backup(-\d[\w.]*)?\.zip$/', (string) ( $a['name'] ?? '' ) ) ) { // vaultly-backup.zip or vaultly-backup-1.8.9.zip, never the -wporg- build
 				$zip = (string) $a['browser_download_url'];
 			}
 		}

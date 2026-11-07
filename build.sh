@@ -3,7 +3,7 @@
 # Builds the two release zips from the vaultly-backup/ plugin folder:
 #
 #   dist/vaultly-backup-wporg-<version>.zip   WordPress.org upload ("Add your plugin"): NO GitHub updater
-#   dist/vaultly-backup.zip                   GitHub release asset (name must stay exactly this: the updater looks for it)
+#   dist/vaultly-backup-<version>.zip         GitHub release asset (the updater accepts vaultly-backup-<version>.zip or vaultly-backup.zip)
 #
 # Both zips contain a single top-level folder "vaultly-backup/" and only the files the plugin needs:
 # no tests, no dev folders, no dot-files, no zips, no GitHub-only README.md, no CLAUDE.md.
@@ -91,7 +91,7 @@ build() { # build <zip path> <extra rsync args...>
 }
 
 WPORG="$DIST/vaultly-backup-wporg-$VERSION.zip"
-GITHUB="$DIST/vaultly-backup.zip"
+GITHUB="$DIST/vaultly-backup-$VERSION.zip"
 build "$WPORG"  --exclude="/$UPDATER"
 build "$GITHUB"
 
@@ -115,4 +115,4 @@ for z in "$WPORG" "$GITHUB"; do
 	printf '  %s  (%s, %s files)\n' "${z#$ROOT/}" "$(du -h "$z" | cut -f1)" "$(unzip -Z1 "$z" | grep -vc '/$')"
 done
 echo
-echo "WordPress.org: upload the -wporg zip on 'Add your plugin'.  GitHub: attach vaultly-backup.zip to the release tagged v$VERSION."
+echo "WordPress.org: upload the -wporg zip on 'Add your plugin'.  GitHub: attach vaultly-backup-$VERSION.zip (NOT the -wporg one) to the release tagged v$VERSION."

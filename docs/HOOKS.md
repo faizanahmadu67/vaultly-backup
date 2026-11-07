@@ -64,7 +64,7 @@ Steps that are not registered through `vaultly_phase_handlers` are dropped. If t
 | `vaultly_settings_fields` | action | `array $settings` | print extra inputs inside the *Schedule & settings* form, above the Save button. Escape your own output. Every input of the form is submitted. |
 | `vaultly_clean_settings` | filter | `array $clean`, `array $raw` | validate and keep your keys: `$clean` already holds the built-in, validated keys (they always win); add yours from `$raw`. Keys you do not return are dropped. |
 
-Settings are stored in `wp-content/vaultly-backups/settings.json` (not in the database, so they survive a restore) and read with `VAULTLY_Job::settings()`.
+Settings are stored in `wp-content/vaultly-backups/settings-<site key>.json` (not in the database, so they survive a restore) and read with `VAULTLY_Job::settings()`.
 
 ## Other
 

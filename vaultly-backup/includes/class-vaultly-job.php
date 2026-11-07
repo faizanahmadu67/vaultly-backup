@@ -216,7 +216,40 @@ final class VAULTLY_Job {
 			}
 		}
 		@wp_delete_file( "$d/probe.txt" );
+		foreach ( array( array( 'settings', 'json', 'settings.json' ), array( 'log', 'jsonl', 'log.jsonl' ), array( 'job', 'json', '.job.json' ) ) as $m ) { // fixed names of older versions -> secret names (once)
+			$new = self::state_in( $d, $m[0], $m[1] );
+			if ( is_file( "$d/$m[2]" ) && ! is_file( $new ) ) {
+				rename( "$d/$m[2]", $new );
+			}
+		}
 		return $cached = $d;
+	}
+
+	/**
+	 * Secret that is part of the names of the state files (settings, activity log, running-job state). The backup folder is web-served and
+	 * only Apache / IIS honour our deny rules; on nginx (or WordPress Playground) a fixed name like log.jsonl would be readable and list the
+	 * backup names and the job token. Derived from wp-config.php values, which a restore never replaces, so it is stable across a restore
+	 * and unknown to anyone who cannot read wp-config.php.
+	 */
+	public static function site_key(): string {
+		static $k = null;
+		if ( null === $k ) {
+			$p = array( defined( 'ABSPATH' ) ? ABSPATH : '' );
+			foreach ( array( 'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD' ) as $c ) {
+				$p[] = defined( $c ) ? (string) constant( $c ) : '';
+			}
+			$k = substr( hash_hmac( 'sha256', 'vaultly-state-files', implode( '|', $p ) ), 0, 16 );
+		}
+		return $k;
+	}
+
+	private static function state_in( string $dir, string $stem, string $ext ): string {
+		return $dir . '/' . $stem . '-' . self::site_key() . '.' . $ext;
+	}
+
+	/** Path of a state file, e.g. state_path( 'log', 'jsonl' ) = .../log-<site key>.jsonl (extension kept so the Apache/IIS deny rules still match). */
+	public static function state_path( string $stem, string $ext ): string {
+		return self::state_in( self::dir(), $stem, $ext );
 	}
 
 	public static function dir_url(): string {
@@ -311,20 +344,21 @@ final class VAULTLY_Job {
 	/* --- settings / key / log (files, not DB: they must survive a restore) --- */
 
 	public static function settings(): array {
-		$f = self::dir() . '/settings.json';
+		$f = self::state_path( 'settings', 'json' );
 		$s = is_file( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
 		return self::clean_settings( is_array( $s ) ? $s : array() );
 	}
 
 	public static function save_settings( array $in ): array {
 		$s = self::clean_settings( $in );
-		file_put_contents( self::dir() . '/settings.json', json_encode( $s ), LOCK_EX );
+		file_put_contents( self::state_path( 'settings', 'json' ), json_encode( $s ), LOCK_EX );
 		self::ensure_schedule();
 		return $s;
 	}
 
 	public static function log( string $action, string $detail = '' ): void {
-		$f  = self::dir() . '/log.jsonl';
+		$f  = self::state_path( 'log', 'jsonl' );
+		$detail = preg_replace( '/_[0-9a-f]{16}(?=\.(?:vlt|vaultly|sql|zip)\b)/i', '', $detail ); // never write a backup's random id (= its access key) into the log
 		$u  = function_exists( 'wp_get_current_user' ) ? wp_get_current_user()->user_login : '';
 		$by = self::$actor ?: ( $u ?: 'system' );
 		file_put_contents( $f, json_encode( array( 't' => time(), 'u' => $by, 'a' => $action, 'd' => substr( $detail, 0, 300 ) ), JSON_INVALID_UTF8_SUBSTITUTE ) . "\n", FILE_APPEND | LOCK_EX );
@@ -334,7 +368,7 @@ final class VAULTLY_Job {
 	}
 
 	public static function recent_log( int $n = 40 ): array {
-		$f = self::dir() . '/log.jsonl';
+		$f = self::state_path( 'log', 'jsonl' );
 		$o = array();
 		foreach ( is_file( $f ) ? array_reverse( array_slice( file( $f ), -$n ) ) : array() as $l ) {
 			if ( is_array( $e = json_decode( $l, true ) ) ) {
@@ -347,14 +381,14 @@ final class VAULTLY_Job {
 	/* --- job state --- */
 
 	public static function load(): ?array {
-		$f = self::dir() . '/.job.json';
+		$f = self::state_path( 'job', 'json' );
 		$d = is_file( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
 		return is_array( $d ) ? $d : null;
 	}
 
 	private static function save( array $j ): void {
 		$j['updated'] = time();
-		$f            = self::dir() . '/.job.json';
+		$f            = self::state_path( 'job', 'json' );
 		$json         = json_encode( $j );
 		if ( false === $json ) { // e.g. a file name that is not valid UTF-8: never replace a good state file with an empty one
 			throw new RuntimeException( sprintf( /* translators: %s: error */ __( 'Cannot save job state: %s', 'vaultly-backup' ), json_last_error_msg() ) );
@@ -390,7 +424,7 @@ final class VAULTLY_Job {
 			self::rrmdir( self::dir() . '/work-' . $j['id'] );
 			@wp_delete_file( self::dir() . '/' . $j['out'] . '.part' );
 		}
-		@wp_delete_file( self::dir() . '/.job.json' );
+		@wp_delete_file( self::state_path( 'job', 'json' ) );
 	}
 
 	/** Housekeeping when idle: stale uploads, parts and work dirs older than a day. */
