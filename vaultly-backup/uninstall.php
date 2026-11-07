@@ -4,6 +4,7 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 // phpcs:disable WordPress.WP.AlternativeFunctions -- removes the plugin's own empty backup folder; WP_Filesystem is not initialised during uninstall
 
 wp_clear_scheduled_hook( 'vaultly_cron' );
+wp_clear_scheduled_hook( 'vaultly_cron_continue' );
 
 // Everything lives in wp-content/vaultly-backups (no DB options). Backups are the user's data:
 // remove the folder only when it holds no backups (.vlt / .vaultly / .sql / .zip); otherwise leave it untouched.

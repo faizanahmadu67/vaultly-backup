@@ -3,7 +3,7 @@ Contributors: faizanahmad67
 Tags: backup, restore, migration, database, wp-content
 Requires at least: 7.0
 Tested up to: 7.1
-Stable tag: 1.8.8
+Stable tag: 1.8.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -37,6 +37,13 @@ No, single-site only.
 Only in a Files only backup (it is a copy of the whole WordPress folder). A restore never overwrites the live wp-config.php. The one exception: if the backup's database uses a different table prefix, the prefix line in wp-config.php is switched to it so the site can read the restored tables.
 
 == Changelog ==
+
+= 1.8.9 =
+* Security: every backup file name ends in a random 64-bit id again (the backup folder is web-served, so the name is the access key). Uploaded backups are stored under a new random name, not the name the uploader chose. Backups made by older versions are renamed once, automatically.
+* The temporary work folder of a running backup (it holds the raw database dump) is now blocked from direct web access and has a longer random name.
+* No PHP limits are changed any more (removed set_time_limit / ignore_user_abort). Scheduled backups now work in slices: if one cron request is not enough, a follow-up cron event continues.
+* Writes to the archive and file list are now checked for failure (disk full).
+* Developers: added hooks so a separate add-on plugin can add steps to a backup and its own settings. They do nothing on their own.
 
 = 1.8.8 =
 * Fixed: the "Enable auto-updates" link was missing in the Plugins list until WordPress happened to run an update check; it now always shows (GitHub build).

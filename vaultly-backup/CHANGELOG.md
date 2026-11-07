@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.9 - 2026-11-08
+Fixes for the WordPress.org plugin review (round 3).
+- **Backup file names are unguessable again.** Every archive name now ends in a random 64-bit id (`..._20261105-063028_3e19c277167f2a40.vlt`). Uploaded backups are stored under a fresh random name instead of the uploader's. Backups made by older versions (names made of host + time only) are renamed once, automatically, when the Backups page is opened with no job running; their old public links stop working.
+- The work folder of a running backup (raw database dump) now has deny rules and a 64-bit random name.
+- **No PHP limits are changed.** Removed `set_time_limit()` / `ignore_user_abort()`. A scheduled backup works in slices of the host's own time limit; if it is not finished, a one-off cron event `vaultly_cron_continue` carries on.
+- `fwrite()` results are checked for the file list, the archive magic and the in-memory entries.
+- Added extension hooks for add-on plugins (`vaultly_phase_handlers`, `vaultly_backup_phases`, `vaultly_job_done`, `vaultly_job_failed`, `vaultly_settings_fields`, `vaultly_clean_settings`, `vaultly_loaded`). They change nothing on their own.
+- Known trade-off: a single file that cannot be stored within the host's `max_execution_time` in one request fails (use *Skip single files larger than…*).
+
 ## 1.8.8 - 2026-11-05
 - Fixed: the "Enable auto-updates" link was missing in the Plugins list until WordPress happened to run an update check; it now always shows (GitHub build).
 

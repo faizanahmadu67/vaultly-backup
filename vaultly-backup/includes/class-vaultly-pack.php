@@ -50,7 +50,7 @@ final class VAULTLY_Pack {
 
 	public static function add_string( $h, string $name, string $data ): void {
 		$m = fopen( 'php://memory', 'w+b' );
-		fwrite( $m, $data );
+		self::w( $m, $data );
 		rewind( $m );
 		self::add_stream( $h, $name, $m, time() );
 		fclose( $m );

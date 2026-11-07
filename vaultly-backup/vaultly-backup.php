@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Vaultly Backup
  * Description: Fast, resumable full-site backup and restore (database + wp-content) with live progress, verify, scheduling and an activity log.
- * Version: 1.8.8
+ * Version: 1.8.9
  * Requires at least: 7.0
  * License: GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 
 define( 'VAULTLY_FILE', __FILE__ );
 define( 'VAULTLY_BASENAME', plugin_basename( __FILE__ ) );
-define( 'VAULTLY_VERSION', '1.8.8' );
+define( 'VAULTLY_VERSION', '1.8.9' );
 
 require_once __DIR__ . '/includes/class-vaultly-zip.php';
 require_once __DIR__ . '/includes/class-vaultly-pack.php';
@@ -36,9 +36,14 @@ final class VAULTLY_Admin {
 		register_activation_hook( VAULTLY_FILE, array( 'VAULTLY_Job', 'activate' ) );
 		register_deactivation_hook( VAULTLY_FILE, function () {
 			wp_clear_scheduled_hook( 'vaultly_cron' );
+			wp_clear_scheduled_hook( 'vaultly_cron_continue' );
 		} );
 		add_action( 'vaultly_cron', array( 'VAULTLY_Job', 'run_scheduled' ) );
+		add_action( 'vaultly_cron_continue', array( 'VAULTLY_Job', 'continue_scheduled' ) ); // next slice of a scheduled backup that did not fit in one cron request
 		add_action( 'admin_init', array( 'VAULTLY_Job', 'ensure_schedule' ) ); // restore replaces the DB (and the cron option): re-arm (admin only: no disk access on front-end requests)
+		add_action( 'plugins_loaded', function () { // add-ons hook this to know the engine is ready (they load after this plugin, so it cannot fire at include time)
+			do_action( 'vaultly_loaded', VAULTLY_VERSION );
+		} );
 
 		add_action( 'admin_menu', function () {
 			add_menu_page( 'Vaultly Backup', 'Vaultly Backup', 'manage_options', 'vaultly-backup', array( __CLASS__, 'page' ), self::menu_icon(), 65 );
@@ -249,6 +254,8 @@ final class VAULTLY_Admin {
 					<h2><?php esc_html_e( 'Restore', 'vaultly-backup' ); ?></h2>
 					<p><label><input type="checkbox" name="safety" value="1" <?php checked( $set['safety'] ); ?>> <?php echo wp_kses( __( 'Make a safety backup of the current site before restoring <small>(turn on for a rollback copy; off restores much faster on big sites)</small>', 'vaultly-backup' ), self::HTML ); ?></label></p>
 
+					<?php do_action( 'vaultly_settings_fields', $set ); // add-ons print their own fields here (escape in the callback); the form is submitted as a whole ?>
+
 					<p><button class="button button-primary" type="submit"><?php esc_html_e( 'Save settings', 'vaultly-backup' ); ?></button> <span id="vaultly-saved"></span></p>
 				</form>
 			</section>
@@ -374,13 +381,9 @@ final class VAULTLY_Admin {
 			$name   = VAULTLY_Job::clean_name( self::post( 'name' ) );
 			$offset = (int) self::post( 'offset' );
 			$total  = (int) self::post( 'total' );
-			$final  = VAULTLY_Job::dir() . '/' . $name;
 			$part   = self::part_path( $name, self::post( 'fp' ) );
 			$f      = isset( $_FILES['chunk'] ) ? $_FILES['chunk'] : null; // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput -- guard() ran; only tmp_name of a verified upload is used
 
-			if ( file_exists( $final ) ) {
-				throw new RuntimeException( __( 'A backup with this name already exists.', 'vaultly-backup' ) );
-			}
 			if ( ! $f || UPLOAD_ERR_OK !== $f['error'] || ! is_uploaded_file( $f['tmp_name'] ) ) {
 				throw new RuntimeException( __( 'Chunk upload failed.', 'vaultly-backup' ) );
 			}
@@ -408,9 +411,10 @@ final class VAULTLY_Admin {
 					wp_delete_file( $part );
 					throw $e;
 				}
+				$final = VAULTLY_Job::dir() . '/' . VAULTLY_Job::secret_name( $name ); // the folder is web-served: the stored name always carries a fresh random id, whatever the uploader called the file
 				rename( $part, $final );
 				chmod( $final, 0644 );
-				VAULTLY_Job::log( 'upload', $name );
+				VAULTLY_Job::log( 'upload', basename( $final ) );
 			}
 			return true;
 		} );

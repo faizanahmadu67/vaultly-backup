@@ -64,7 +64,7 @@ final class VAULTLY_Zip {
 
 	public static function add_string( $h, $c, string $name, string $data ): void {
 		$m = fopen( 'php://memory', 'w+b' );
-		fwrite( $m, $data );
+		self::w( $m, $data );
 		rewind( $m );
 		self::add_stream( $h, $c, $name, $m, false, time() );
 		fclose( $m );

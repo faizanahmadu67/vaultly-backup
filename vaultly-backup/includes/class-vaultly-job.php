@@ -14,7 +14,8 @@ defined( 'ABSPATH' ) || exit;
 final class VAULTLY_Job {
 
 	const PREFIX_RE = '/^(\s*\$table_prefix\s*=\s*)([\'"])[A-Za-z0-9_]+\2\s*;/m';
-	const NAME_RE ='/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(vlt|vaultly|sql|zip)$/'; // full = .vlt (.vaultly = made by 1.7.0-1.7.4), database only = .sql, files only = .zip
+	const NAME_RE ='/^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.(vlt|vaultly|sql|zip)$/'; // full = .vlt (.vaultly = made by 1.7.0-1.7.4), database only = .sql, files only = .zip
+	const SECRET_RE = '/_[0-9a-f]{16}\.(vlt|vaultly|sql|zip)$/'; // every archive name ends in a random 64-bit id: the folder is web-served, so the name is the access key
 	const STORE   = array( 'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'zip', 'gz', 'bz2', '7z', 'rar', 'mp3', 'mp4', 'mov', 'webm', 'woff2', 'pdf' );
 	const LATE    = array( 'import', 'replace', 'finish' ); // phases that run after users/sessions were replaced
 	/** Phase and process names (methods, not constants: they are translated). */
@@ -32,7 +33,22 @@ final class VAULTLY_Job {
 			'finish'   => __( 'Cleaning up', 'vaultly-backup' ),
 			'vfiles'   => __( 'Checking file integrity', 'vaultly-backup' ),
 		);
-		return $l[ $p ];
+		return $l[ $p ] ?? ( self::ext_phases()[ $p ]['label'] ?? $p );
+	}
+
+	/**
+	 * Phases added by extensions (e.g. a separate add-on plugin that copies the finished backup to cloud storage).
+	 * Filter 'vaultly_phase_handlers': name => array( 'run' => callable( array &$job, float $deadline ): bool, 'label' => string, 'weight' => float ).
+	 * 'run' follows the same contract as the built-in p_* methods: resumable, keep progress in $job['s'], return true when finished.
+	 */
+	private static function ext_phases(): array {
+		$h = function_exists( 'apply_filters' ) ? apply_filters( 'vaultly_phase_handlers', array() ) : array();
+		return is_array( $h ) ? $h : array();
+	}
+
+	/** Progress-bar weight of a phase (built-in table, else the extension's own, else 1). */
+	private static function weight( string $p ): float {
+		return (float) ( self::WEIGHT[ $p ] ?? ( self::ext_phases()[ $p ]['weight'] ?? 1 ) );
 	}
 
 	private static function title( string $t ): string {
@@ -162,7 +178,7 @@ final class VAULTLY_Job {
 	}
 
 	public static function clean_settings( array $in ): array {
-		return array(
+		$clean = array(
 			'sched'       => in_array( $in['sched'] ?? '', array( 'daily', 'weekly' ), true ) ? $in['sched'] : 'off',
 			'keep'        => max( 1, min( 100, (int) ( $in['keep'] ?? 5 ) ) ),
 			'email'       => function_exists( 'is_email' ) && is_email( $in['email'] ?? '' ) ? $in['email'] : '',
@@ -172,6 +188,9 @@ final class VAULTLY_Job {
 			'no_spam'     => ! empty( $in['no_spam'] ),
 			'no_revs'     => ! empty( $in['no_revs'] ),
 		);
+		// Add-ons keep their own keys through this filter (they are dropped otherwise): ( $clean, $raw_input ) -> $clean.
+		$ext = function_exists( 'apply_filters' ) ? apply_filters( 'vaultly_clean_settings', $clean, $in ) : $clean;
+		return is_array( $ext ) ? $clean + $ext : $clean; // built-in keys always keep their validated values
 	}
 
 	/* ---------- storage ---------- */
@@ -211,11 +230,48 @@ final class VAULTLY_Job {
 		return self::dir() . '/' . $name;
 	}
 
-	/** Archive name: sitedomain[-subfolder][_tag][_database|_files]_timestamp.ext (tag = scheduled / pre-restore / uploaded; full backups have no scope word). */
+	/**
+	 * Archive name: sitedomain[-subfolder][_tag][_database|_files]_timestamp_RANDOM.ext (tag = scheduled / pre-restore; full backups have no scope word).
+	 * RANDOM = 16 hex chars from random_bytes(): the backup folder is served by the web server, so a name made only of host + time could be guessed.
+	 */
 	public static function file_name( string $tag, string $scope, string $ext = '' ): string {
 		$host = substr( preg_replace( '/[^A-Za-z0-9.-]+/', '-', preg_replace( '/^www\./i', '', (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) . '/' . trim( (string) wp_parse_url( home_url(), PHP_URL_PATH ), '/' ) ), 0, 80 ); // host + subfolder, so https://x.com/clientsite gives x.com-clientsite
 		$ext  = $ext ?: ( array( 'db' => 'sql', 'files' => 'zip' )[ $scope ] ?? 'vlt' );
-		return implode( '_', array_filter( array( trim( $host, '.-/' ) ?: 'site', $tag, array( 'db' => 'database', 'files' => 'files' )[ $scope ] ?? '', gmdate( 'Ymd-His' ) ) ) ) . '.' . $ext;
+		return implode( '_', array_filter( array( trim( $host, '.-/' ) ?: 'site', $tag, array( 'db' => 'database', 'files' => 'files' )[ $scope ] ?? '', gmdate( 'Ymd-His' ), bin2hex( random_bytes( 8 ) ) ) ) ) . '.' . $ext;
+	}
+
+	/** Name for an uploaded archive: the visitor's name (cleaned) with a fresh random id, so the stored name is never chosen or guessable by the uploader. */
+	public static function secret_name( string $name ): string {
+		$name = self::clean_name( $name );
+		$ext  = strtolower( pathinfo( $name, PATHINFO_EXTENSION ) );
+		$stem = preg_replace( '/_[0-9a-f]{16}$/', '', substr( $name, 0, -( strlen( $ext ) + 1 ) ) ); // drop an id we gave it earlier: a new one is added
+		return rtrim( substr( $stem, 0, 100 ), '._-' ) . '_' . bin2hex( random_bytes( 8 ) ) . '.' . $ext;
+	}
+
+	/**
+	 * Backups made by older versions have names that can be guessed (host + time). Give each one a random id, once, when idle
+	 * (the old public link stops working; that is the point). The .meta.json sidecar follows.
+	 */
+	public static function secure_names(): void {
+		$lock = fopen( self::dir() . '/.lock', 'c' );
+		if ( ! $lock || ! flock( $lock, LOCK_EX | LOCK_NB ) ) {
+			return; // a step is running
+		}
+		if ( ! self::load() ) {
+			foreach ( glob( self::dir() . '/*.{vlt,vaultly,sql,zip}', GLOB_BRACE ) ?: array() as $p ) {
+				$n = basename( $p );
+				if ( ! self::valid_name( $n ) || preg_match( self::SECRET_RE, $n ) ) {
+					continue;
+				}
+				$new = self::secret_name( $n );
+				if ( rename( $p, self::dir() . '/' . $new ) ) {
+					is_file( "$p.meta.json" ) && rename( "$p.meta.json", self::dir() . "/$new.meta.json" );
+					self::log( 'renamed_private', "$n -> $new" );
+				}
+			}
+		}
+		flock( $lock, LOCK_UN );
+		fclose( $lock );
 	}
 
 	/**
@@ -244,6 +300,10 @@ final class VAULTLY_Job {
 		$w = self::dir() . '/work-' . $j['id'];
 		if ( ! is_dir( $w ) ) {
 			mkdir( $w, 0700 );
+			// The work folder holds the raw database dump while a backup runs and sits inside the web-served backup folder: refuse every request to it.
+			file_put_contents( "$w/.htaccess", "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n" );
+			file_put_contents( "$w/web.config", '<?xml version="1.0"?><configuration><system.webServer><security><requestFiltering><fileExtensions allowUnlisted="false"><add fileExtension=".none" allowed="true" /></fileExtensions></requestFiltering></security></system.webServer></configuration>' );
+			file_put_contents( "$w/index.php", '' );
 		}
 		return $w;
 	}
@@ -338,6 +398,7 @@ final class VAULTLY_Job {
 		if ( self::load() ) {
 			return;
 		}
+		self::secure_names();
 		foreach ( glob( self::dir() . '/{*.up,*.part,work-*}', GLOB_BRACE ) ?: array() as $p ) {
 			if ( filemtime( $p ) < time() - DAY_IN_SECONDS ) {
 				is_dir( $p ) ? self::rrmdir( $p ) : wp_delete_file( $p );
@@ -419,23 +480,50 @@ final class VAULTLY_Job {
 		}
 	}
 
-	/** Runs a whole backup inside one cron request. */
+	/**
+	 * Scheduled backup. No PHP limits are changed: the job is resumable, so this request works for a slice of the host's own time
+	 * limit and, if the backup is not finished, a one-off cron event ('vaultly_cron_continue') carries on with the next slice.
+	 */
 	public static function run_scheduled(): void {
-		@set_time_limit( 0 );
-		@ignore_user_abort( true );
 		try {
 			$token = self::start( 'backup', '', array( 'by' => 'scheduler', 'tag' => 'scheduled' ) )['token'];
+		} catch ( Throwable $e ) {
+			self::scheduled_failed( $e );
+			return;
+		}
+		self::drive_scheduled( $token );
+	}
+
+	/** Next slice of a scheduled backup that did not fit in one cron request. */
+	public static function continue_scheduled(): void {
+		$j = self::load();
+		if ( $j && 'scheduler' === $j['by'] ) { // a backup started by a person is driven by their browser, not by cron
+			self::drive_scheduled( $j['token'] );
+		}
+	}
+
+	private static function drive_scheduled( string $token ): void {
+		$max  = (int) ini_get( 'max_execution_time' );
+		$stop = $max > 0 ? microtime( true ) + max( 5, $max * 0.3 ) : INF; // each step() stops by itself after at most half the limit
+		try {
 			do {
 				$r = self::step( $token, true );
 				if ( ! empty( $r['busy'] ) ) {
 					sleep( 2 );
 				}
-			} while ( empty( $r['done'] ) );
-		} catch ( Throwable $e ) {
-			self::log( 'scheduled_failed', $e->getMessage() );
-			if ( $to = self::settings()['email'] ) {
-				wp_mail( $to, sprintf( /* translators: %s: site name */ __( '[%s] Scheduled backup FAILED', 'vaultly-backup' ), get_bloginfo( 'name' ) ), $e->getMessage() );
+			} while ( empty( $r['done'] ) && microtime( true ) < $stop );
+			if ( empty( $r['done'] ) ) {
+				wp_schedule_single_event( time() + 5, 'vaultly_cron_continue' );
 			}
+		} catch ( Throwable $e ) {
+			self::scheduled_failed( $e );
+		}
+	}
+
+	private static function scheduled_failed( Throwable $e ): void {
+		self::log( 'scheduled_failed', $e->getMessage() );
+		if ( $to = self::settings()['email'] ) {
+			wp_mail( $to, sprintf( /* translators: %s: site name */ __( '[%s] Scheduled backup FAILED', 'vaultly-backup' ), get_bloginfo( 'name' ) ), $e->getMessage() );
 		}
 	}
 
@@ -460,7 +548,7 @@ final class VAULTLY_Job {
 		if ( PHP_INT_SIZE < 8 ) {
 			throw new RuntimeException( __( '64-bit PHP is required (32-bit PHP cannot handle archives over 2 GB).', 'vaultly-backup' ) );
 		}
-		$id    = bin2hex( random_bytes( 4 ) );
+		$id    = bin2hex( random_bytes( 8 ) ); // names the work folder, which sits in a web-served directory
 		$scope = in_array( $o['scope'] ?? 'full', array( 'full', 'db', 'files' ), true ) ? ( $o['scope'] ?? 'full' ) : 'full';
 		$by    = $o['by'] ?? ( function_exists( 'wp_get_current_user' ) ? wp_get_current_user()->user_login : 'system' );
 		$job   = array(
@@ -476,7 +564,7 @@ final class VAULTLY_Job {
 
 		if ( 'backup' === $type ) {
 			$job['scope']  = $scope;
-			$job['phases'] = self::backup_phases( $scope );
+			$job['phases'] = self::backup_phases( $scope, 'backup' );
 		} else {
 			$job['src']   = basename( self::archive_path( $archive ) );
 			$job['fmt']   = self::fmt( $job['src'] );
@@ -489,7 +577,7 @@ final class VAULTLY_Job {
 				$job['phases'] = array_merge(
 					array( 'validate' ),
 					'vaultly' === $job['fmt'] ? array( 'dbcopy' ) : array(),
-					self::settings()['safety'] ? self::backup_phases( $job['scope'] ) : array(), // automatic pre-restore safety backup of what will be replaced
+					self::settings()['safety'] ? self::backup_phases( $job['scope'], 'restore' ) : array(), // automatic pre-restore safety backup of what will be replaced
 					'db' === $job['scope'] ? array() : array( 'extract' ),
 					$has_db ? array( 'import', 'replace' ) : array(),
 					array( 'finish' )
@@ -503,18 +591,30 @@ final class VAULTLY_Job {
 		return array( 'token' => $job['token'] );
 	}
 
-	private static function backup_phases( string $scope ): array {
-		return array_merge(
+	/**
+	 * $type = 'backup' (a real backup) or 'restore' (the safety backup made before a restore).
+	 * Filter 'vaultly_backup_phases' ( $phases, $scope, $type ) lets an add-on append steps (for example after 'final', which leaves the finished
+	 * archive in self::dir() . '/' . $job['out']). It can only ADD steps: every built-in step must stay, in order, and every added step must be registered.
+	 */
+	private static function backup_phases( string $scope, string $type = 'backup' ): array {
+		$base = array_merge(
 			'files' === $scope ? array() : array( 'db' ),
 			'db' === $scope ? array() : array( 'list', 'files' ),
 			array( 'final' )
 		);
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return $base;
+		}
+		$all   = (array) apply_filters( 'vaultly_backup_phases', $base, $scope, $type );
+		$known = self::ext_phases();
+		$ok    = array_values( array_filter( $all, function ( $p ) use ( $known ) {
+			return is_string( $p ) && ( method_exists( __CLASS__, 'p_' . $p ) || isset( $known[ $p ] ) );
+		} ) );
+		return array_values( array_intersect( $ok, $base ) ) === $base ? $ok : $base;
 	}
 
 	/** One unit of work. $can = current user is an authorised admin (false only for late restore phases). */
 	public static function step( string $token, bool $can ): array {
-		@ignore_user_abort( true );
-		@set_time_limit( 0 );
 		$lock = fopen( self::dir() . '/.lock', 'c' );
 		if ( ! flock( $lock, LOCK_EX | LOCK_NB ) ) {
 			return array( 'busy' => true );
@@ -543,6 +643,20 @@ final class VAULTLY_Job {
 		}
 	}
 
+	/** Runs the current phase: a built-in p_* method, else a handler registered through 'vaultly_phase_handlers'. */
+	private static function run_phase( array &$j, float $deadline ): bool {
+		$ph = (string) $j['phases'][ $j['i'] ];
+		if ( method_exists( __CLASS__, 'p_' . $ph ) ) {
+			$m = 'p_' . $ph;
+			return self::$m( $j, $deadline );
+		}
+		$run = self::ext_phases()[ $ph ]['run'] ?? null;
+		if ( ! is_callable( $run ) ) { // e.g. the add-on that owned this phase was deactivated while the job was running
+			throw new RuntimeException( sprintf( /* translators: %s: phase name */ __( 'Unknown step "%s" (is the add-on that provides it still active?).', 'vaultly-backup' ), $ph ) );
+		}
+		return (bool) $run( $j, $deadline );
+	}
+
 	private static function run_step( array $j ): array {
 		if ( ! empty( $j['pfx'] ) ) { // the restored database has another table prefix: use it for the rest of this request too
 			$GLOBALS['wpdb']->set_prefix( $j['pfx'] );
@@ -552,8 +666,7 @@ final class VAULTLY_Job {
 
 		try {
 			do {
-				$m    = 'p_' . $j['phases'][ $j['i'] ];
-				$done = self::$m( $j, $deadline );
+				$done = self::run_phase( $j, $deadline );
 				if ( $done ) {
 					$j['i']++;
 					$j['s'] = array();
@@ -579,6 +692,7 @@ final class VAULTLY_Job {
 			}
 			self::log( $j['type'] . '_failed', $msg );
 			self::cleanup( $j );
+			function_exists( 'do_action' ) && do_action( 'vaultly_job_failed', $j['type'], $msg );
 			throw new RuntimeException( $msg );
 		}
 
@@ -588,6 +702,7 @@ final class VAULTLY_Job {
 			if ( 'verify' !== $j['type'] ) {
 				self::retain();
 			}
+			function_exists( 'do_action' ) && do_action( 'vaultly_job_done', $j['type'], array( 'file' => 'backup' === $j['type'] ? $j['out'] : '', 'source' => $j['src'] ?? '', 'scope' => $j['scope'], 'by' => $j['by'] ) );
 			$msg = array( 'backup' => __( 'Backup complete.', 'vaultly-backup' ), 'restore' => __( 'Restore complete. You may need to log in again.', 'vaultly-backup' ), 'verify' => __( 'Backup verified.', 'vaultly-backup' ) );
 			return array( 'done' => true, 'percent' => 100, 'kind' => $j['type'], 'file' => 'backup' === $j['type'] ? $j['out'] : '', 'message' => ( $j['result'] ?? '' ) ?: $msg[ $j['type'] ] );
 		}
@@ -598,15 +713,15 @@ final class VAULTLY_Job {
 			return ( 'restore' === $j['type'] && in_array( $p, array( 'db', 'list', 'files', 'final' ), true ) ? __( 'Safety backup: ', 'vaultly-backup' ) : '' ) . self::label( $p );
 		}, $j['phases'] );
 		$total = array_sum( array_map( function ( $p ) {
-			return self::WEIGHT[ $p ];
+			return self::weight( $p );
 		}, $j['phases'] ) );
 		$before = 0;
 		foreach ( array_slice( $j['phases'], 0, $j['i'] ) as $p ) {
-			$before += self::WEIGHT[ $p ];
+			$before += self::weight( $p );
 		}
 		return array(
 			'done'    => false,
-			'percent' => (int) floor( 100 * ( $before + self::WEIGHT[ $ph ] * $j['p'] ) / $total ),
+			'percent' => (int) floor( 100 * ( $before + self::weight( $ph ) * $j['p'] ) / $total ),
 			'detail'  => $j['detail'] ?? '',
 			'title'   => self::title( $j['type'] ),
 			'steps'   => $steps,
@@ -671,7 +786,7 @@ final class VAULTLY_Job {
 						$s['big']++;
 						continue;
 					}
-					fwrite( $o, "$size\t$rel\n" );
+					self::put( $o, "$size\t$rel\n" );
 					$s['n']++;
 					$s['bytes'] += $size;
 				}
@@ -710,7 +825,7 @@ final class VAULTLY_Job {
 		fseek( $c, 0, SEEK_END );
 		$pack = 'full' === $j['scope']; // full = Vaultly's own format; files only = plain zip
 		if ( $pack && 0 === $s['zpos'] ) {
-			fwrite( $h, VAULTLY_Pack::MAGIC );
+			self::put( $h, VAULTLY_Pack::MAGIC );
 			$s['zpos'] = ftell( $h );
 		}
 		list( $root, $pre ) = self::root( $j['scope'] );

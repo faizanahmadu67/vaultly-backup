@@ -1,2 +1,4 @@
 dev-only/
 *.zip
+dist/
+.idea/
